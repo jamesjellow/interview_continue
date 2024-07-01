@@ -32,7 +32,6 @@ func main() {
 func run(args []string) error {
 	if len(args) < 2 {
 		err := fmt.Errorf("expected 'add' or 'install' subcommand\n%s", usage)
-		fmt.Fprintln(os.Stderr, err) // Ensure this is printed to stderr
 		return err
 	}
 
@@ -46,7 +45,6 @@ func run(args []string) error {
 		return handlerInstance.HandleInstall(&depGraph)
 	default:
 		err := fmt.Errorf("unknown subcommand: %s\n%s", strings.Join(args[1:], " "), usage)
-		fmt.Fprintln(os.Stderr, err) // Ensure this is printed to stderr
 		return err
 	}
 }
