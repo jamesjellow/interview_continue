@@ -93,7 +93,7 @@ Now you can use `fpm` cli tool!
 
 ## Todos
 
-- [ ] Add tests
+- [ ] Add more tests
 - [ ] Add more options for the user (e.g. `fpm rm`)
 - [ ] Add more error handling (e.g. when a package is not found, etc.)
 - [ ] Add more logging (e.g. verbose, debug, etc.)

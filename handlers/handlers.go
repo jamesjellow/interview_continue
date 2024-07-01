@@ -8,6 +8,21 @@ import (
 	"github.com/jamesjellow/fpm/utils"
 )
 
+type HandlerInterface interface {
+	HandleAdd(args []string, depGraph *graph.Graph[string, string]) error
+	HandleInstall(depGraph *graph.Graph[string, string]) error
+}
+
+type RealHandlers struct{}
+
+func (h RealHandlers) HandleAdd(args []string, depGraph *graph.Graph[string, string]) error {
+	return HandleAdd(args, depGraph)
+}
+
+func (h RealHandlers) HandleInstall(depGraph *graph.Graph[string, string]) error {
+	return HandleInstall(depGraph)
+}
+
 var PackageJsonPath = "./package.json"
 
 func HandleAdd(args []string, depGraph *graph.Graph[string, string]) error {

@@ -18,6 +18,8 @@ fpm add <foo>      add the <foo> dependency to your project
 
 `
 
+var handlerInstance handlers.HandlerInterface = handlers.RealHandlers{}
+
 func main() {
 	err := run(os.Args)
 	if err != nil {
@@ -39,9 +41,9 @@ func run(args []string) error {
 
 	switch args[1] {
 	case "add":
-		return handlers.HandleAdd(args, &depGraph)
+		return handlerInstance.HandleAdd(args, &depGraph)
 	case "install":
-		return handlers.HandleInstall(&depGraph)
+		return handlerInstance.HandleInstall(&depGraph)
 	default:
 		err := fmt.Errorf("unknown subcommand: %s\n%s", strings.Join(args[1:], " "), usage)
 		fmt.Fprintln(os.Stderr, err) // Ensure this is printed to stderr
