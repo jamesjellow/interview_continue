@@ -2,6 +2,8 @@
 
 Fast Package Manager (fpm) is a tool to create packages.
 
+![Demo](https://s7.ezgif.com/tmp/ezgif-7-54809f77a0.gif)
+
 ## Usage
 
 ```bash
@@ -27,13 +29,13 @@ $ fpm install # Install all dependencies from package.json
 ## Installation
 
 ```bash
-git clone https://github.com/jamesjellow/interview_continue
-cd interview_continue
+$ git clone https://github.com/jamesjellow/interview_continue
+$ cd interview_continue
 ```
 
 ```bash
-go build .
-go install
+$ go build .
+$ go install
 ```
 
 Now you can use `fpm` cli tool!
