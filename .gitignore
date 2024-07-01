@@ -30,3 +30,5 @@ fpm
 vite-project
 package*.json
 node_modules
+
+.DS_Store
