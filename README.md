@@ -2,7 +2,7 @@
 
 Fast Package Manager (fpm) is a tool to create packages.
 
-![Demo](https://s7.ezgif.com/tmp/ezgif-7-54809f77a0.gif)
+![Demo](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZTI3M3lxY2FpamJrNGMyZTY2NXVtcXh2dTkweDBwdnBnY2hiYTFqaCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/5J0tFwHsOFoJ7Dq0pw/giphy.gif)
 
 ## Usage
 
