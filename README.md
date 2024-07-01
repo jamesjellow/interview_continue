@@ -20,7 +20,7 @@ $ fpm install # Install all dependencies from package.json
    - This will take a single argument, which is the name of the package
    - The package might include a version, delimited by “@” like “is-thirteen@0.1.13”, which it should parse
    - It should write to an _existing_ (you can create it manually or with `npm init`) package.json to add `"is-thirteen": "0.1.13"` to the `dependencies` object
-2. `install` - Downloads all of the packages that are specified in package.json, as well as package that are dependencies of these
+2. `fpm install` - Downloads all of the packages that are specified in package.json, as well as package that are dependencies of these
    - Should read the `dependencies` object of the package.json
    - Assume that the node_modules folder is currently empty, rather than trying to determine what exists or not
    - Determine all dependencies of dependencies
