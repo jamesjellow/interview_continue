@@ -1,6 +1,6 @@
 # Fast Package Manager (fpm)
 
-Fast Package Manager (fpm) is a tool to create packages.
+Fast Package Manager (fpm) is a tool to install node packages.
 
 ![Demo](https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExZTI3M3lxY2FpamJrNGMyZTY2NXVtcXh2dTkweDBwdnBnY2hiYTFqaCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/5J0tFwHsOFoJ7Dq0pw/giphy.gif)
 
