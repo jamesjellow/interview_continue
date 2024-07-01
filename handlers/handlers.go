@@ -3,7 +3,6 @@ package handlers
 import (
 	"fmt"
 	"os"
-	"sync"
 
 	"github.com/dominikbraun/graph"
 	"github.com/jamesjellow/fpm/utils"
@@ -42,9 +41,6 @@ func HandleAdd(args []string, depGraph *graph.Graph[string, string]) error {
 
 	}
 
-	// Remove all the tarballs at the end of the install process
-	defer utils.RemoveTarballs(utils.NodeModulesDir)
-
 	return nil
 }
 
@@ -60,10 +56,7 @@ func HandleInstall(depGraph *graph.Graph[string, string]) error {
 		return fmt.Errorf("failed to create node_modules directory: %v", err)
 	}
 
-	var wg sync.WaitGroup
-	errChan := make(chan error, 1)
-
-	// Execute a go routine for each dependency
+	// Install each dependency
 	for _, depType := range []string{"dependencies", "devDependencies"} {
 		deps, err := utils.ParseDependencies(packageJSON, depType)
 		if err != nil {
@@ -71,44 +64,23 @@ func HandleInstall(depGraph *graph.Graph[string, string]) error {
 		}
 
 		for _, dep := range deps.Keys() {
-			wg.Add(1)
-			go func(dep string, depType string) {
-				defer wg.Done()
+			version, ok := deps.Get(dep)
+			if !ok {
+				return fmt.Errorf("failed to get version for dependency: %s", dep)
+			}
 
-				version, ok := deps.Get(dep)
-				if !ok {
-					errChan <- fmt.Errorf("failed to get version for dependency: %s", dep)
-					return
-				}
+			versionStr, ok := version.(string)
+			if !ok {
+				return fmt.Errorf("version for dependency %s is not a string: %T", dep, version)
+			}
 
-				versionStr, ok := version.(string)
-				if !ok {
-					errChan <- fmt.Errorf("version for dependency %s is not a string: %T", dep, version)
-					return
-				}
+			forDevDependency := depType == "devDependencies"
+			if _, err := utils.RunInstallPackage(dep, versionStr, depGraph, forDevDependency); err != nil {
+				return err
+			}
 
-				forDevDependency := depType == "devDependencies"
-				if _, err := utils.RunInstallPackage(dep, versionStr, depGraph, forDevDependency); err != nil {
-					errChan <- err
-				}
-
-			}(dep, depType)
 		}
 	}
-
-	go func() {
-		wg.Wait()
-		close(errChan)
-	}()
-
-	for err := range errChan {
-		if err != nil {
-			return err
-		}
-	}
-
-	// Remove all the tarballs at the end of the install process
-	defer utils.RemoveTarballs(utils.NodeModulesDir)
 
 	fmt.Println("✔ All packages installed successfully")
 	return nil

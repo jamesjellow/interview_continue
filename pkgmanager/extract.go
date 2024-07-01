@@ -27,6 +27,13 @@ func ExtractTarball(tarballPath, destDir, packageName string) error {
 	}
 	defer file.Close()
 
+	// Defer the cleanup of the tarball file
+	defer func() {
+		if err := os.Remove(tarballPath); err != nil {
+			log.Printf("failed to remove tarball: %v", err)
+		}
+	}()
+
 	gzr, err := gzip.NewReader(file)
 	if err != nil {
 		log.Printf("failed to create gzip reader: %v", err)

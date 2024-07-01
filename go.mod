@@ -8,7 +8,6 @@ require (
 	github.com/briandowns/spinner v1.23.1
 	github.com/dominikbraun/graph v0.23.0
 	github.com/iancoleman/orderedmap v0.3.0
-	golang.org/x/sync v0.7.0
 )
 
 require (

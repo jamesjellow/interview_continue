@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -17,7 +19,9 @@ import (
 )
 
 var (
-	NodeModulesDir = "./node_modules"
+	NodeModulesDir     = "./node_modules"
+	installingPackages = make(map[string]bool)
+	installMutex       sync.Mutex
 )
 
 // Runner for handlers to install a package
@@ -27,16 +31,14 @@ func RunInstallPackage(packageName string, packageVersion string, depGraph *grap
 	s.Start()
 	defer s.Stop()
 
-	actualVersion, err := installPackage(packageName, packageVersion, depGraph)
+	visited := make(map[string]bool)
+	actualVersion, err := installPackage(packageName, packageVersion, depGraph, visited)
 	if err != nil {
 		return actualVersion, err
 	}
-	finishedStr := fmt.Sprintf("Finished %v@%v", packageName, packageVersion)
-	if forDevDependency {
-		finishedStr += " (for dev dependency)"
-	}
+
 	s.Stop()
-	fmt.Println(finishedStr)
+	fmt.Printf("✔ Installed %s@%s\n", packageName, actualVersion)
 
 	return actualVersion, nil
 }
@@ -76,26 +78,51 @@ func ParsePackageArg(arg string) (string, string) {
 }
 
 // Logic for installing a package and keeping track of known deps in a graph.
-func installPackage(packageName string, packageVersion string, depGraph *graph.Graph[string, string]) (string, error) {
-	// Check if the package and all its dependencies are already installed, if so then skip it
-	visited := make(map[string]bool)
-	if isPackageAndDependenciesInNodeModules(packageName, visited) {
+func installPackage(packageName string, packageVersion string, depGraph *graph.Graph[string, string], visited map[string]bool) (string, error) {
+	installMutex.Lock()
+	if installingPackages[packageName] {
+		installMutex.Unlock()
+		return packageVersion, nil // Already being installed, avoid cycles
+	}
+	installingPackages[packageName] = true
+	installMutex.Unlock()
+
+	// Remember to cleanup after done installing
+	defer func() {
+		installMutex.Lock()
+		delete(installingPackages, packageName)
+		installMutex.Unlock()
+	}()
+
+	if visited[packageName] {
+		return packageVersion, nil // Already visited, avoid cycles
+	}
+	visited[packageName] = true
+
+	// Check if the package is installed, if so add a vertex to the dep graph
+	packagePath := filepath.Join(NodeModulesDir, packageName)
+	if strings.HasPrefix(packageName, "@") {
+		parts := strings.SplitN(packageName, "/", 2)
+		if len(parts) == 2 {
+			packagePath = filepath.Join(NodeModulesDir, parts[0], parts[1])
+		}
+	}
+	_, err := os.Stat(packagePath)
+	if err == nil {
 		if err := (*depGraph).AddVertex(packageName); err != nil && err != graph.ErrVertexAlreadyExists {
 			return "", fmt.Errorf("failed to add vertex: %v", err)
 		}
 		return packageVersion, nil
 	}
 
-	// Fetch the package info from the npm registry
+	// Get the package info from the registry
 	packageInfo, err := pkgmanager.FetchPackageInfo(packageName, packageVersion)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch package info: %v", err)
 	}
+	actualVersion := packageInfo.Version
 
-	actualVersion := packageInfo.Version                      // react@latest -> react@18.3.1
-	packagePath := filepath.Join(NodeModulesDir, packageName) // ./node_modules/react
-
-	// Download the package
+	// Download
 	tarballURL := packageInfo.Dist["tarball"].(string)
 	expectedShasum := packageInfo.Dist["shasum"].(string)
 	tarballPath, err := pkgmanager.DownloadPackage(tarballURL, expectedShasum, NodeModulesDir)
@@ -103,130 +130,107 @@ func installPackage(packageName string, packageVersion string, depGraph *graph.G
 		return "", fmt.Errorf("failed to download package: %v", err)
 	}
 
-	// Extract the package
-	if err := pkgmanager.ExtractTarball(tarballPath, NodeModulesDir, packageName); err != nil {
+	// Extract
+	extractDir := NodeModulesDir
+	if strings.HasPrefix(packageName, "@") {
+		parts := strings.SplitN(packageName, "/", 2)
+		if len(parts) == 2 {
+			extractDir = filepath.Join(NodeModulesDir, parts[0])
+		}
+	}
+	if err := pkgmanager.ExtractTarball(tarballPath, extractDir, packageName); err != nil {
 		return "", fmt.Errorf("failed to extract package: %v", err)
 	}
 
-	// Walk the directories and get all the package.json files for a given package path
-	packageJsonPaths, err := findPackageJsonFiles(packagePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to find package.json files: %v", err)
-	}
-
-	// Add the package to the dependency graph
+	// Add to dep graph
 	if err := (*depGraph).AddVertex(packageName); err != nil && err != graph.ErrVertexAlreadyExists {
 		return "", fmt.Errorf("failed to add vertex: %v", err)
 	}
 
-	// For each of the package jsons, install their dependencies
-	for _, packageJsonPath := range packageJsonPaths {
-		content, err := os.ReadFile(packageJsonPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to read package.json: %v", err)
-		}
-
-		var packageJson map[string]interface{}
-		if err := json.Unmarshal(content, &packageJson); err != nil {
-			return "", fmt.Errorf("failed to decode package.json: %v", err)
-		}
-
-		dependencies, ok := packageJson["dependencies"].(map[string]interface{})
-		if !ok {
-			// No dependencies, this is not an error
-			return "", nil
-		}
-
-		for depName, depVersion := range dependencies {
-			versionStr, ok := depVersion.(string)
-			if !ok {
-				return "", fmt.Errorf("invalid version for dependency %s: %v", depName, depVersion)
-			}
-
-			if err := (*depGraph).AddVertex(depName); err != nil && err != graph.ErrVertexAlreadyExists {
-				return "", fmt.Errorf("failed to add vertex: %v", err)
-			}
-			if err := (*depGraph).AddEdge(packageName, depName); err != nil && err != graph.ErrEdgeAlreadyExists {
-				return "", fmt.Errorf("failed to add edge: %v", err)
-			}
-
-			// Recursively call installPackage with the additional deps we need to install
-			if _, err := installPackage(depName, versionStr, depGraph); err != nil {
-				return "", err
-			}
-		}
-
+	// Find the first package JSON
+	packageJsonPath, err := findPackageJson(packageName)
+	if err != nil {
+		log.Printf("Warning: %v, skipping dependency installation", err)
+		return actualVersion, nil
 	}
 
-	return "^" + actualVersion, nil
+	// Process the main package.json
+	if err := processPackageJson(packageJsonPath, packageName, depGraph, visited); err != nil {
+		return "", err
+	}
+
+	// Check for additional package.json files
+	packageDir := filepath.Dir(packageJsonPath)
+	additionalPackageJsons, err := findAdditionalPackageJsons(packageDir)
+	if err != nil {
+		log.Printf("Warning: Error finding additional package.json files: %v", err)
+	} else {
+		for _, additionalPath := range additionalPackageJsons {
+			if err := processPackageJson(additionalPath, packageName, depGraph, visited); err != nil {
+				log.Printf("Warning: Error processing additional package.json at %s: %v", additionalPath, err)
+			}
+		}
+	}
+
+	return actualVersion, nil
 }
 
-// Check if the package exists in the node_modules directory
-func isPackageAndDependenciesInNodeModules(packageName string, visited map[string]bool) bool {
-	if visited[packageName] {
-		return true
-	}
-	visited[packageName] = true
-
-	var packagePath string
-
-	// Handle scoped packages
-	if strings.HasPrefix(packageName, "@") {
-		parts := strings.Split(packageName, "/")
-		if len(parts) != 2 {
-			return false
-		}
-		packagePath = filepath.Join(NodeModulesDir, parts[0], parts[1])
-	} else {
-		packagePath = filepath.Join(NodeModulesDir, packageName)
-	}
-
-	// Check if the package directory exists
-	if _, err := os.Stat(packagePath); err != nil {
-		return false
-	}
-
-	// Read and parse package.json
-	packageJsonPath := filepath.Join(packagePath, "package.json")
+// As the name implies, get all the deps from the package.json file and return a map of them
+func getDependenciesFromPackageJson(packageJsonPath string) (map[string]string, error) {
 	content, err := os.ReadFile(packageJsonPath)
 	if err != nil {
-		return false
+		return nil, fmt.Errorf("failed to read package.json: %v", err)
 	}
 
 	var packageJson map[string]interface{}
 	if err := json.Unmarshal(content, &packageJson); err != nil {
-		return false
+		return nil, fmt.Errorf("failed to parse package.json: %v", err)
 	}
 
-	// Check dependencies
-	dependencies, ok := packageJson["dependencies"].(map[string]interface{})
-	if ok {
-		for dep := range dependencies {
-			if !isPackageAndDependenciesInNodeModules(dep, visited) {
-				return false
-			}
+	dependencies := make(map[string]string)
+	if deps, ok := packageJson["dependencies"].(map[string]interface{}); ok {
+		for name, version := range deps {
+			dependencies[name] = version.(string)
 		}
 	}
 
-	return true
+	return dependencies, nil
 }
 
-// Walk the folders to get all the package.json files
-func findPackageJsonFiles(dir string) ([]string, error) {
-	var paths []string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// Find the package json for the given package name and return the path to its package json file
+func findPackageJson(packageName string) (string, error) {
+	possiblePaths := []string{
+		filepath.Join(NodeModulesDir, packageName, "package.json"),
+		filepath.Join(NodeModulesDir, strings.Replace(packageName, "/", "/@", 1), "package.json"),
+		filepath.Join(NodeModulesDir, strings.Replace(packageName, "/", "/@", 1), packageName, "package.json"),
+	}
+
+	for _, path := range possiblePaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// If not found in predefined paths, do a recursive search
+	var packageJsonPath string
+	err := filepath.Walk(NodeModulesDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() && info.Name() == "node_modules" && path != dir {
+		if info.Name() == "package.json" && strings.Contains(path, packageName) {
+			packageJsonPath = path
 			return filepath.SkipDir
-		}
-		if !info.IsDir() && info.Name() == "package.json" {
-			paths = append(paths, path)
 		}
 		return nil
 	})
-	return paths, err
+
+	if err != nil {
+		return "", err
+	}
+	if packageJsonPath == "" {
+		return "", fmt.Errorf("package.json not found for %s", packageName)
+	}
+	return packageJsonPath, nil
 }
 
 // Write to the packageJson with the new dependencies that you are adding
@@ -301,16 +305,54 @@ func ParseDependencies(packageJson *orderedmap.OrderedMap, dependencyType string
 	return depsMap, nil
 }
 
-func RemoveTarballs(dir string) error {
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// Try to recursively process all the dependencies in the package.json file and add them to the graph
+func processPackageJson(packageJsonPath, packageName string, depGraph *graph.Graph[string, string], visited map[string]bool) error {
+	dependencies, err := getDependenciesFromPackageJson(packageJsonPath)
+	if err != nil {
+		return err
+	}
+
+	for depName, depVersion := range dependencies {
+		if err := (*depGraph).AddVertex(depName); err != nil && err != graph.ErrVertexAlreadyExists {
+			log.Printf("Warning: failed to add vertex for %s: %v", depName, err)
+			continue
+		}
+
+		err := (*depGraph).AddEdge(packageName, depName)
+		if err != nil {
+			if err == graph.ErrEdgeAlreadyExists {
+				// Edge already exists, this is fine, continue
+				continue
+			}
+			if strings.Contains(err.Error(), "cycle") {
+				// Circular dependency detected, log a warning and continue
+				continue
+			}
+			// For other errors, log a warning and continue
+			log.Printf("\n  - Warning: failed to add edge from %s to %s: %v", packageName, depName, err)
+			continue
+		}
+
+		if _, err := installPackage(depName, depVersion, depGraph, visited); err != nil {
+			// Log the error but continue with other dependencies
+			log.Printf("\n  - Error installing dependency %s: %v", depName, err)
+		}
+	}
+
+	return nil
+}
+
+// See if there's any more package jsons in the current directory. Ifso, return them. Otherwise, return an empty array and no error.
+func findAdditionalPackageJsons(dir string) ([]string, error) {
+	var paths []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && strings.HasSuffix(info.Name(), ".tgz") {
-			if err := os.Remove(path); err != nil {
-				return err
-			}
+		if info.Name() == "package.json" && path != filepath.Join(dir, "package.json") {
+			paths = append(paths, path)
 		}
 		return nil
 	})
+	return paths, err
 }
